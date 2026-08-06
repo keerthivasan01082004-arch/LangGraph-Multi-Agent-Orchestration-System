@@ -1,0 +1,63 @@
+name: CD — build, push, deploy
+
+on:
+  push:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: 123456789012.dkr.ecr.us-east-1.amazonaws.com
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [backend, worker, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/conductor-gha
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Login to ECR
+        run: aws ecr get-login-password | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+      - name: Build and push image
+        run: |
+          IMAGE=${{ env.ECR_REGISTRY }}/conductor/${{ matrix.service }}
+          docker build -f infra/docker/${{ matrix.service }}.Dockerfile -t $IMAGE:${{ github.sha }} -t $IMAGE:latest .
+          docker push $IMAGE:${{ github.sha }}
+          docker push $IMAGE:latest
+
+  deploy-staging:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/conductor-gha
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Update ECS service
+        run: |
+          aws ecs update-service --cluster conductor-staging \
+            --service conductor-backend \
+            --force-new-deployment
+
+  deploy-production-canary:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/conductor-gha
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Canary (10%) then full rollout
+        run: |
+          # Weighted target group split: 90/10 old/new
+          aws elbv2 modify-listener --listener-arn ${{ secrets.LISTENER_ARN }} \
+            --default-actions file://infra/aws/canary-90-10.json
+      - name: Wait for healthy canary
+        run: |
+          sleep 180
+          aws elbv2 describe-target-health --target-group-arn ${{ secrets.TG_CANARY_ARN }}

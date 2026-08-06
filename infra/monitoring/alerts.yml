@@ -1,0 +1,33 @@
+groups:
+  - name: conductor-alerts
+    rules:
+      - alert: HighAPIErrorRate
+        expr: sum(rate(http_server_errors_total[5m])) / sum(rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API 5xx rate above 5%"
+
+      - alert: HighLLMLatency
+        expr: histogram_quantile(0.95, sum(rate(llm_latency_seconds_bucket[5m])) by (le)) > 30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 LLM latency above 30s"
+
+      - alert: GPUUtilizationHigh
+        expr: avg(vllm_gpu_utilization) > 0.90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU saturated; review batch size / autoscale policy"
+
+      - alert: UsageCostSpike
+        expr: sum(rate(conductor_cost_usd_total[10m])) > threshold_trigger_value
+        labels:
+          severity: warning
+        annotations:
+          summary: "Daily cost run-rate exceeded budget"

@@ -1,0 +1,51 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "Prometheus",
+        "enable": true,
+        "name": "Annotations & Alerts"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "title": "API latency p95",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))"}
+      ]
+    },
+    {
+      "title": "Token spend by agent",
+      "type": "barchart",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {"expr": "sum(rate(conductor_usage_tokens_total[5m])) by (agent)"}
+      ]
+    },
+    {
+      "title": "GPU utilization (vLLM)",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [
+        {"expr": "100 * (1 - avg by(container) (rate(container_cpu_usage_seconds_total{name=\"vllm\"}[5m])))"}
+      ]
+    },
+    {
+      "title": "Critic loop rejections",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "gridPos": {"h": 4, "w": 12, "x": 12, "y": 8},
+      "targets": [
+        {"expr": "sum(rate(conductor_agent_rejections_total[5m]))"}
+      ]
+    }
+  ],
+  "title": "Conductor — production"
+}

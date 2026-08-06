@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conductor-worker
+  labels:
+    app: conductor
+    tier: worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: conductor
+      tier: worker
+  template:
+    metadata:
+      labels:
+        app: conductor
+        tier: worker
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/conductor/worker:latest
+          imagePullPolicy: IfNotPresent
+          args: ["-A", "app.workers.celery_app:celery_app", "worker", "-Q", "ingestion,embedding", "--concurrency=2"]
+          envFrom:
+            - secretRef:
+                name: conductor-backend-secrets
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
