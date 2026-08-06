@@ -1,127 +1,139 @@
 # 19 — Folder Structure
 
-Production-grade repository layout. Paths mirror this repo exactly.
+Production-grade repository layout mirroring this repo.
 
 ```
-LangGraph-Multi-Agent-Orchestration-System/
-├── AGENTS.md                      # agent coding conventions
+.
+├── README.md
+├── AGENTS.md
 ├── LICENSE
-├── README.md                      # project overview + architecture snapshot
-├── backend/                       # Python 3.11 · FastAPI
-│   ├── pyproject.toml             # uv-managed; ruff/mypy/pytest config
+├── .gitignore
+├── .github/
+│   └── workflows/
+│       ├── ci.yml               # ruff · mypy · pytest
+│       └── deploy.yml          # build → ECR → canary/blue-green
+│
+├── backend/
+│   ├── pyproject.toml          # uv project + ruff/mypy/pytest config
+│   ├── Dockerfile
 │   ├── .env.example
 │   ├── alembic.ini
 │   ├── alembic/
 │   │   ├── env.py
-│   │   ├── script.py.mako
-│   │   └── versions/
-│   │       └── 0001_initial.py
+│   │   └── versions/0001_initial.py
 │   ├── app/
-│   │   ├── main.py                # FastAPI factory + lifespan + /metrics
-│   │   ├── config.py              # pydantic-settings (all env)
+│   │   ├── main.py             # app factory, middleware bundle, /metrics
+│   │   ├── config.py           # pydantic-settings
 │   │   ├── api/
-│   │   │   ├── router.py          # /api/v1 composite router
-│   │   │   ├── deps.py            # JWT auth + RBAC + tenant scoping
+│   │   │   ├── router.py       # /api/v1 root
+│   │   │   ├── deps.py         # get_current_user, get_workspace, require_role
 │   │   │   └── v1/
-│   │   │       ├── auth.py        # register / login / refresh / logout
-│   │   │       ├── conversations.py  # create, get, list, SSE stream
-│   │   │       ├── documents.py      # upload + listing + presigned download
-│   │   │       ├── usage.py          # cost/token aggregation
-│   │   │       └── health.py         # /health/live /health/ready
+│   │   │       ├── auth.py
+│   │   │       ├── health.py
+│   │   │       ├── documents.py
+│   │   │       ├── conversations.py
+│   │   │       └── usage.py
 │   │   ├── core/
-│   │   │   ├── security.py        # JWT (access+refresh) + bcrypt
-│   │   │   ├── errors.py          # ApiError framework + handlers
-│   │   │   ├── middleware.py      # access log + correlation id + metrics
-│   │   │   ├── metrics.py         # Prometheus counters/histograms/gauge
-│   │   │   └── logging.py         # structlog JSON
+│   │   │   ├── security.py     # JWT + bcrypt
+│   │   │   ├── errors.py       # typed APIError envelope
+│   │   │   ├── logging.py      # structlog
+│   │   │   ├── middleware.py   # correlation id, access log
+│   │   │   └── metrics.py      # Prometheus
 │   │   ├── db/
-│   │   │   ├── models.py          # ORM (users, workspaces, docs, convos, msgs, usage, audit)
-│   │   │   └── session.py         # engine + SessionLocal
-│   │   ├── schemas/
-│   │   │   └── user.py            # Pydantic v2 request/response
-│   │   ├── graph/
-│   │   │   ├── state.py           # AgentState TypedDict (accumulated channels)
-│   │   │   ├── builder.py         # StateGraph.compile(checkpointer, store)
-│   │   │   ├── checkpointer.py    # PostgresSaver + PostgresStore (lazy)
-│   │   │   ├── event.py           # SSE event payload builders
-│   │   │   └── routes.py          # conditional routing predicates
-│   │   ├── agents/
-│   │   │   ├── nodes.py           # planner/researcher/executor/critic/finalizer
-│   │   │   └── specs.py           # declarative agent metadata
-│   │   ├── tools/
-│   │   │   ├── base.py            # Tool dataclass + jsonschema validation
-│   │   │   ├── registry.py        # ALL_TOOLS / SAFE_TOOLS + openai schema
-│   │   │   └── definitions.py     # tool implementations (calc, weather, search…)
-│   │   ├── memory/
-│   │   │   ├── context.py         # summarization + eviction + token budget
-│   │   │   └── store.py           # long-term fact store facade
-│   │   ├── orchestrator/
-│   │   │   └── service.py         # astream_events → SSE bridge + persistence
-│   │   ├── models/
-│   │   │   ├── gateway.py         # vLLM OpenAI client + LiteLLM fallback + pricing
-│   │   │   └── cost.py            # UsageRecord persistence per agent call
-│   │   ├── ingestion/
-│   │   │   ├── parsers.py         # pdf/docx/txt/csv extraction
-│   │   │   └── chunkers.py        # token-aware chunking + token_count
+│   │   │   ├── models.py       # SQLAlchemy 2.0 ORM
+│   │   │   └── session.py      # engine + SessionLocal
+│   │   ├── schemas/user.py     # Pydantic contracts
 │   │   ├── services/
-│   │   │   ├── storage.py         # S3 put/get/presign
-│   │   │   ├── embeddings.py      # sentence-transformers batch encode
-│   │   │   └── vectorstore.py     # Qdrant upsert/search/delete (tenant filter)
-│   │   └── workers/
-│   │       ├── celery_app.py      # Celery + task routes
-│   │       └── tasks.py           # process_document → embed_chunk_batch
+│   │   │   ├── storage.py      # S3 abstraction
+│   │   │   ├── embeddings.py   # BGE/ONNX
+│   │   │   └── vectorstore.py  # Qdrant client
+│   │   ├── ingestion/
+│   │   │   ├── parsers.py      # pdf/docx/txt/csv
+│   │   │   └── chunkers.py     # tiktoken, token_count
+│   │   ├── workers/
+│   │   │   ├── celery_app.py
+│   │   │   └── tasks.py        # process_document, embed_chunk_batch
+│   │   ├── tools/
+│   │   │   ├── base.py         # Tool primitive (JSON-schema validated)
+│   │   │   ├── definitions.py  # tool implementations
+│   │   │   └── registry.py     # ALL_TOOLS, SAFE_TOOLS, approval policy
+│   │   ├── agents/
+│   │   │   ├── nodes.py        # planner/researcher/executor/critic/finalizer
+│   │   │   └── specs.py        # AgentSpec registry
+│   │   ├── graph/
+│   │   │   ├── state.py        # AgentState
+│   │   │   ├── builder.py      # StateGraph + conditional edges
+│   │   │   ├── checkpointer.py # PostgresSaver / PostgresStore
+│   │   │   └── event.py        # SSE event payloads
+│   │   ├── memory/
+│   │   │   ├── context.py      # summarize_messages / evict
+│   │   │   └── store.py        # long-term remember/recall
+│   │   ├── models/
+│   │   │   ├── gateway.py      # vLLM OpenAI-compatible + LiteLLM fallback
+│   │   │   └── cost.py         # persist_usage
+│   │   └── orchestrator/
+│   │       └── service.py      # run_conversation_stream (SSE bridge)
 │   └── tests/
-│       ├── conftest.py            # env bootstrap for pydantic-settings
-│       ├── test_api.py            # health/metrics/error envelope
 │       ├── test_chunkers.py
-│       ├── test_graph.py          # routing predicates + builder topology
-│       ├── test_security.py       # JWT roundtrip / expiry / typos
-│       └── test_tools.py          # registry, calculator sandbox, approval flags
-├── frontend/                      # Next.js 14 (App Router, TS, Tailwind)
-│   ├── package.json / tsconfig.json / tailwind.config.ts / next.config.mjs
-│   ├── app/
-│   │   ├── layout.tsx  globals.css
-│   │   ├── page.tsx              # landing
-│   │   ├── login/page.tsx          # username/password → JWT storage
-│   │   └── chat/page.tsx           # streaming chat shell
-│   ├── components/
-│   │   └── ChatWindow.tsx          # SSE consumer + token rendering
-│   └── lib/
-│       └── auth-hook.ts            # bearer token from localStorage
-├── finetune/                      # Mistral-7B QLoRA pipeline
-│   ├── pyproject.toml / README.md / .env.example
-│   ├── configs/
-│   │   ├── qlora.yaml
-│   │   └── vllm.yaml
-│   ├── data/raw/sample.jsonl        # synthetic seed examples
-│   └── src/
-│       ├── dataset.py               # clean → structured → split
-│       ├── train_qlora.py          # PEFT/TRL trainer (NF4)
-│       ├── eval.py                 # validity + faithfulness metrics
-│       ├── export_merged.py        # merge adapters → registry
-│       └── serve_vllm.py           # one-shot serving snippet
+│       ├── test_security.py
+│       ├── test_tools.py
+│       └── test_graph.py
+│
+├── frontend/
+│   ├── package.json
+│   ├── next.config.mjs
+│   ├── tailwind.config.ts
+│   ├── src/
+│   │   ├── app/               # App Router pages (chat, workspace, admin)
+│   │   │   ├── layout.tsx
+│   │   │   ├── page.tsx
+│   │   │   └── (auth)/...
+│   │   ├── api/                # fetch wrappers + SSE EventSource client
+│   │   ├── components/chat/     # MessageList, Composer, ApprovalBanner
+│   │   ├── lib/auth.ts         # middleware (JWT cookies)
+│   │   └── types/api.ts        # generated from OpenAPI
+│   └── Dockerfile
+│
+├── finetune/
+│   ├── data/
+│   │   ├── build_dataset.py
+│   │   ├── clean.py            # dedupe / PII / normalization
+│   │   └── schemas.py
+│   ├── train/
+│   │   ├── train_qlora.py      # PeFT+BitsAndBytes
+│   │   └── configs/qlora-mistral-7b.yaml
+│   ├── eval/
+│   │   ├── eval_harness.py      # rubric + tool-call + format accuracy
+│   │   └── golden_set.jsonl
+│   └── serve/
+│       ├── export_merge.py      # adapter → merged
+│       └── vllm_serve.sh        # quantization nf4, served-model-name
+│
 ├── infra/
-│   ├── docker/
-│   │   ├── backend.Dockerfile / worker.Dockerfile / frontend.Dockerfile
-│   │   └── docker-compose.yml       # postgres+qdrant+redis+minio+api+worker
+│   ├── docker-compose.yml       # dev stack: api, worker, pg, redis, qdrant, minio
+│   ├── docker/                  # per-service Dockerfiles
 │   ├── terraform/
-│   │   ├── main.tf                  # RDS, ElastiCache, S3, ECR, ECS, ALB
-│   │   └── network.tf               # SG + target group + cache subnet
-│   ├── k8s/
-│   │   ├── backend-deployment.yaml / backend-hpa.yaml / worker-deployment.yaml
-│   ├── nginx/api.conf               # SSE-friendly proxy
-│   └── monitoring/
-│       ├── prometheus.yml  grafana-datasources.yml  grafana-dashboard.json  alerts.yml
-├── .github/workflows/
-│   ├── ci.yml                       # ruff · mypy · pytest · tsc
-│   └── cd.yml                       # ECR push → staging → prod canary
-└── docs/                            # 00–20 system design sections
+│   │   ├── environments/{dev,staging,prod}.tf
+│   │   └── modules/            # vpc, rds, redis, qdrant, s3, eks, waf
+│   ├── kubernetes/
+│   │   ├── api-deploy.yaml + hpa
+│   │   ├── worker-deploy.yaml + kedascale
+│   │   ├── vllm-deploy.yaml + gpu
+│   │   └── ingress.yaml        # nginx: SSE timeouts
+│   ├── monitoring/
+│   │   ├── prometheus.yml
+│   │   ├── grafana/dashboards/*.json
+│   │   ├── loki-config.yml
+│   │   └── alerts/*.rules.yml
+│   └── helm/                    # charts (or keep raw manifests)
+│
+└── docs/                        # this documentation set (00–20)
 ```
 
-Key conventions enforced by this layout:
+## Invariants this layout enforces
 
-- **Ownership**: `graph/` = orchestration only; `agents/` = decision logic;
-  `tools/` = capability; `memory/` = persistence of state/knowledge.
-- **Clean boundaries**: API never imports agent internals; tests import
-  surfaces (`orchestrator/service.py`) not private internals.
-- Config in **one place** (`config.py`), secrets only via env.
+- **Boundaries**: `agents/` never talks to the DB; `services/` owns external
+  I/O; `api/` owns HTTP; `graph/` owns state flow — keeps each layer
+  independently unit-testable.
+- **Secrets**: config only via env; `.env.example` is the contract.
+- **Tests** run inside CI with no GPU/DB (checkpointer degrades to `None`).
