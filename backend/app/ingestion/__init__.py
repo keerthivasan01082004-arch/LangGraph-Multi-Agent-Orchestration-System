@@ -1,0 +1,1 @@
+"""Document ingestion package: parse → validate → chunk → embed → index."""
