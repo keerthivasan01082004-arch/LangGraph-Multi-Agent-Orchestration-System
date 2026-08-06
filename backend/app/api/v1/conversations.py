@@ -6,7 +6,7 @@ streams back an SSE event feed. Full flow in docs/20-code-flow.md.
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Body, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -47,7 +47,7 @@ def get_conversation(
 @router.post("/{conversation_id}/messages/stream")
 def stream_message(
     conversation_id: str,
-    content: str,
+    content: str = Body(..., embed=True, description="User message payload"),
     workspace: Workspace = Depends(get_workspace),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -64,9 +64,10 @@ def stream_message(
     db.commit()
 
     user_message = {"role": "user", "content": content, "id": str(uuid.uuid4())}
+    thread_id = conv.thread_id
 
     async def event_stream():
-        async for event in run_conversation_stream(conv.thread_id, user_message, workspace.id):
+        async for event in run_conversation_stream(thread_id, user_message, workspace.id, conv.id, user.id):
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
