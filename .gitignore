@@ -64,14 +64,15 @@ dist/
 *.sqlite3
 *.db
 
-# Model artifacts (never commit weights)
-models/
+# Model artifacts (never commit weights — match by extension, not the app/models package)
 *.bin
 *.pt
 *.ckpt
 *.safetensors
 *.gguf
 *.onnx
+finetune/out/
+finetune/checkpoints/
 
 # Terraform
 .terraform/

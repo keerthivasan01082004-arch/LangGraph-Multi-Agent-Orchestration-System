@@ -1,0 +1,1 @@
+"""LLM integration layer: vLLM gateway, prompt templates, fallback routing."""
