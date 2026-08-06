@@ -1,0 +1,1 @@
+"""Core cross-cutting concerns: logging, errors, security, middleware."""
