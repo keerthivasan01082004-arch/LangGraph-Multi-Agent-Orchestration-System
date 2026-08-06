@@ -160,6 +160,8 @@ def critic_node(state: dict[str, Any]) -> dict[str, Any]:
 
 def finalizer_node(state: dict[str, Any]) -> dict[str, Any]:
     citations = "\n".join(f"[{i + 1}] {c}" for i, c in enumerate(state.get("citations", [])))
+    critique = state.get("critique", "")
+    feedback = f"\nCritic feedback to address (only if present):\n{critique}" if critique else ""
     prompt = [
         {"role": "system", "content": SYSTEM_PROMPTS["finalizer"]},
         {
@@ -167,7 +169,7 @@ def finalizer_node(state: dict[str, Any]) -> dict[str, Any]:
             "content": (
                 f"Question: {state.get('input')}\n"
                 f"Evidence: {json.dumps(state.get('research_notes', []))}\n"
-                f"Citations:\n{citations}"
+                f"Citations:\n{citations}{feedback}"
             ),
         },
     ]
