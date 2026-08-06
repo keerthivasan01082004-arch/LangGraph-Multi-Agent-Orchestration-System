@@ -70,9 +70,9 @@ train:
   save_steps: 250
 ```
 
-Training runs on a single A10G (24GB) or smaller with QLoRA; the NF4 bits for
-the working set fit in ~5.5GB/param. We track 300 checkpoints / steps and pick
-by eval, not last.
+Training runs on a single A10G (24GB) with QLoRA; the NF4 working set fits in
+~5.5GB. Checkpoints every 250 steps; the winner is chosen by eval, never by last
+save.
 
 ## 4. Evaluation & benchmarking
 
@@ -90,8 +90,9 @@ by eval, not last.
 | this QLoRA (NF4) | 97% | 4.5/5 | 268 |
 | gpt-4o-mini (hosted, baseline) | 99% | 4.6/5 | 380 |
 
-Cost/task then = ModelX tokens; the 40% is the delta measured **per task**
-(FT self-hosted ≈ 40% cheaper than the 4o-mini baseline at comparable quality).
+Cost per task = model price × tokens/task; the 40% is the delta measured
+**per task** (FT self-hosted ≈ 40% cheaper than the hosted 4o-mini baseline at
+comparable quality).
 
 ## 5. Serving the fine-tuned model
 
