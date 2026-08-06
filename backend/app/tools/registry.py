@@ -102,5 +102,5 @@ def get_tool(name: str) -> Tool:
 
 
 def openai_schemas(names: list[str] | None = None) -> list[dict[str, object]]:
-    selected = names or SAFE_TOOLS
+    selected = [ALL_TOOLS[n] for n in names] if names else SAFE_TOOLS
     return [t.openai_schema() for t in selected]

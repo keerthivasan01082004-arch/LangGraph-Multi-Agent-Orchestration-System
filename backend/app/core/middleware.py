@@ -1,4 +1,4 @@
-"""ASGI middleware: correlation ids, CORS, access logging."""
+"""ASGI middleware: correlation ids, CORS, access logging, Prometheus."""
 
 import struct
 import time
@@ -9,6 +9,8 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 import structlog
+
+from app.core.metrics import observe_request
 
 logger = structlog.get_logger("http.access")
 
@@ -47,4 +49,5 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
             duration_ms=round(duration_ms, 2),
             duration_encoded=latency_struct,
         )
+        observe_request(request.method, request.url.path, response.status_code, duration_ms)
         return response

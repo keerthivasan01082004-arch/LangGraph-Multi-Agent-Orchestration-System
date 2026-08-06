@@ -19,6 +19,10 @@ def _encoder(name: str = "cl100k_base") -> tiktoken.Encoding:
     return _encoders[name]
 
 
+def token_count(text: str) -> int:
+    return len(_encoder().encode(text))
+
+
 def chunk_text(text: str, chunk_size: int | None = None, overlap: int | None = None) -> list[str]:
     settings = get_settings()
     chunk_size = chunk_size or settings.chunk_size_tokens

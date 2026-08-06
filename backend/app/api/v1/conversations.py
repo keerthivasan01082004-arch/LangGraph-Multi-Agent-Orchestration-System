@@ -67,8 +67,8 @@ def stream_message(
     thread_id = conv.thread_id
 
     async def event_stream():
-        async for event in run_conversation_stream(thread_id, user_message, workspace.id, conv.id, user.id):
-            yield f"data: {json.dumps(event)}\n\n"
+        async for event in run_conversation_stream(thread_id, user_message, workspace.id):
+            yield f"data: {json.dumps(event, default=str)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
