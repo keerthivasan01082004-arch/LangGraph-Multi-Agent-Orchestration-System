@@ -1,0 +1,9 @@
+# vLLM serving config (docs/09-fine-tuning.md)
+model: ./out/merged
+served_model_name: conductor/mistral-7b
+max_model_len: 4096
+gpu_memory_utilization: 0.90
+dtype: bfloat16
+enable_prefix_caching: true
+tensor_parallel_size: 1
+port: 8000
