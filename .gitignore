@@ -57,6 +57,7 @@ node_modules/
 .next/
 out/
 dist/
+*.tsbuildinfo
 
 # LangGraph checkpoints/local state
 .chkpt/
