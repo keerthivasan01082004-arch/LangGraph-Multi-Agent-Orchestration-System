@@ -1,56 +1,84 @@
 # 15 — Scalability
 
-How the system scales from 100 to 1M users, and where we bottleneck at each
-step.
+How the system scales from 100 to 1M users, and where the bottlenecks are at
+each stage.
 
-## Growth S-curve
+## 1. Growth stages and actions
 
-| Tier | Users | Concurrency model | Bottleneck | Action |
+| Stage | Users | System | Primary bottleneck | Action taken |
 |---|---|---|---|---|
-| S       | 100 | SQLite→PG single box, 1 GPU | PG | cache, indexing |
-| M     | 1k  | PG + Redis main DB | first GPU saturation | +1 vLLM, HPA |
-| L     |10k 🔥 | PG+Redis+Qdrant, GPUs pool | queue burst | KEDA workers, embedding queue |
-| XL   | 100k | partition PG, replica-join reads | write throughput | range partitions, VPC + read replica |
-| XXL |1M | sharded KV + queue, SFU strings | global fanout | regional edge, Kafka ↔ RRate |
+| S1 | 100 | single box (docker compose + 1 GPU) | none | baseline; dev parity |
+| S2 | 1,000 | PG + Redis, 1 vLLM GPU | first GPU saturation | +1 vLLM replica; HPA on API |
+| S3 | 10,000 | PG + Redis + Qdrant, GPU pool (3–5 A10G) | queue burst on ingestion | KEDA autoscaling on Celery; embedding queue split |
+| S4 | 100,000 | partitioned PG + read replicas | write throughput on usage/messages | monthly range partitions, pgbouncer, read replica for dashboards |
+| S5 | 1,000,000 | sharded data plane + regional edge | global fan-out / cross-region latency | multi-region edge, queue upgrade (Kafka), per-region GPU pools |
 
-## 2. Real reasoning
+## 2. Bottleneck-by-component analysis
 
-- **API**: stateless; HPA 1→20 pods; JWT means no session affinity.
-- **DB**: one PG → read replica for usage queries + pool; at 100k chats/day,
-  `usage_records` & `messages` ranged-partition by month. Add now-means
-  `partition by created_at` (we prep the schema for it in `docs/11`).
-- **Retrieval**: Qdrant per collection; one collection, tenant filter — 
-  corpus scale is bounded by index/RAM → move `on_disk_payload=true` + replica.
-  Multi-collection shard when >1B vectors.
-- **Streaming**: SSE is long-lived; proxy config sets timeouts; EventSource
-  reconnects. Under Websocket-scale, swap in WebSockets for bidirectional edge
-  (or keep SSE + backpressure — SSE is fine given one-direction flow; latency
-  guard at 15min max by auto-closing after `done`).
-- **Inference**: the GPU is the scarce resource. Per-GPU concurrency ~
-  `batch=256/seq_len`; KEDA on vLLM queue; spot pools + warm standby.
-- **Ingestion**: Celery `ingestion` queue scales via KEDA; embedding jobs for
-  big uploads chunked; backpressure via `disable_queue`.
+### API (stateless)
+- Scales horizontally trivially: JWT auth means no sticky sessions.
+- HPA 1→20 pods on CPU + latency; SSE streams hold connections, not threads.
+- Per-pod connection limit for SSE (e.g. 512) with a stream budget metric.
 
-## 3. Capacity arithmetic (back-of-envelope)
+### PostgreSQL
+- Writes: usage records + messages dominate. Monthly range partitions keep
+  indexes hot and deletes fast (`docs/11`).
+- Reads: dashboards go to a read replica; pgBouncer for connection pooling.
+- At S5: per-region primary with streaming replication; conversation tables
+  tenant-sharded by `workspace_id` hash if a single writer saturates.
 
-Assume 1M daily users, 10% active/day, 4 conversations/user-month, ~8 agent
-emulations per convo:
-- API traffic: 40k conv/day ≈ 1.7 req/s chat + ~20 req/s total. Easy.
-- Tokens/day: 40k conv × 5k tokens avg × ~8 agent calls ≈ 60M→ closer to
-  250M tokens/month with streams. At a M token/$ (fine-tuned cost ≈ $0.08/1M),
-  that's ~$20/day — well the ML budget is fine.
-- Qdrant: 100GB corpus; 384d vectors = ~2.5GB; in-memory payload fine.
-- PG: 1M conversations + ~10M rows messages; partitioned, heap ok.
+### Redis
+- Used for cache + rate limits + Celery broker. Horizontal: cluster mode with
+  key slots by user/workspace; memory-bound → increase node count.
 
-## 4. Failure & scale priming checklist
+### Qdrant
+- One collection, tenant-filtered payloads. Scales via replicas (read
+  scaling) then sharding at > ~100M vectors.
+- Move payloads `on_disk_payload=true` for large corpora; keep vectors in RAM.
 
-- [ ] `/metrics` per pod removed; service-level SLOs.
-- [ ] DB partitions + pgbouncer; HAPROXY at > 20k writers.
-- [ ] KEDA autoscalers for workers.
-- [ ] Rate shape for SSE vs long-poll.
-- [ ] Presigned URL lifecycle for S3 (10min default).
-- [ ] Per-workspace WAF/quota percentages.
+### Inference (the scarce resource)
+- GPU concurrency ≈ `max_batch / seq_len`; vLLM continuous batching packs
+  requests. KEDA scales vLLM pods on queue depth.
+- Spot instance pools for non-latency-critical research batches; on-demand
+  warm standby for real-time.
 
-> Numbers updated arch for realism; the interviews doc (`docs/17`) walks through
-> "how would you handle 10×?" including the "buy vs build" for streaming
-> at/composite, GPU bidding, and RDS→Aurora migration path.
+### Ingestion workers
+- Celery queue `ingestion` + `embedding`; KEDA scales on queue length;
+  embeddings batch per GPU chunk; large uploads are processed in chunks with
+  `task_acks_late` for crash safety.
+
+## 3. Back-of-envelope capacity math
+
+Assumptions for 1M users:
+
+| Assumption | Value |
+|---|---|
+| daily active | 10% (100k) |
+| conversations / active user / month | 4 |
+| conversations / day | ~13k |
+| agent model calls / conversation | ~8 |
+| avg tokens / call | 5k |
+| total tokens / day | ~520M |
+
+- **Token spend** at fine-tuned 7B self-hosted cost (~$0.08/M mixed tokens):
+  ≈ **$42/day** in inference economics — the reason self-hosting matters.
+- **Qdrant**: 100 GB corpus, dim 384 → ~2.5 GB of vectors; in-memory is fine.
+- **PG**: ~13k conversations/day → 4.7M rows/year; partitioned, trivially fine.
+
+## 4. Scaling decisions with trade-offs
+
+| Decision | Why | Trade-off |
+|---|---|---|
+| HPA + KEDA over manual scaling | elastic cost | cold-start latency on scale-up |
+| Redis → Kafka only at S5 | KISS until the event volume demands it | replay/ordering limitations before that |
+| Qdrant replicas before sharding | cheap read scaling | writes to every replica |
+| Spot for batch, on-demand for realtime | 60–70% GPU cost cut | spot reclaims need queue-retry wiring |
+| SSE kept over WebSockets | proxy-friendly, resumable, simpler | no server-initiated push beyond stream |
+
+## 5. Load test & verification
+
+- `k6` / `locust` scenarios: chat streaming, upload storm, concurrent 1k SSE.
+- Assert SLOs from `docs/14` hold; soak for GPU memory leaks (vLLM known to
+  hold steady with right `--max-paddings`).
+- Chaos: kill a vLLM pod mid-stream → client reconnects, thread resumes via
+  checkpoint.
