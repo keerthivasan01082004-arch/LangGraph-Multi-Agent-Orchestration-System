@@ -9,8 +9,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from app.api.v1.health import router as health_router
+from app.api.router import api_router
 from app.config import get_settings
 from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging
@@ -41,7 +43,11 @@ def create_app() -> FastAPI:
 
     install_error_handlers(app)
 
-    app.include_router(health_router, tags=["health"])
+    app.include_router(api_router)
+
+    @app.get("/metrics", include_in_schema=False)
+    def metrics() -> Response:
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     return app
 

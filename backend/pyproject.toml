@@ -27,6 +27,7 @@ dependencies = [
     "tenacity>=9.0.0",
     "tiktoken>=0.7.0",
     "python-multipart>=0.0.9",
+    "jsonschema>=4.23.0",
     "boto3>=1.35.0",
     "prometheus-client>=0.20.0",
 ]

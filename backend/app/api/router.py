@@ -9,4 +9,4 @@ api_router.include_router(health.router)
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(documents.router, prefix="/workspaces/{workspace_id}/documents", tags=["documents"])
 api_router.include_router(conversations.router, prefix="/workspaces/{workspace_id}/conversations", tags=["conversations"])
-api_router.include_router(usage.router, prefix="/usage", tags=["usage"])
+api_router.include_router(usage.router, tags=["usage"])  # usage.py carries its own /workspaces/{id} prefix
