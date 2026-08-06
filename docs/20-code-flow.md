@@ -1,120 +1,107 @@
-# 20 — Code Flow
+# 20 — Code Flow: Lifecycle of One Request
 
-Lifecycle of a single user request, from the moment it hits the API until the
-final answer streams back. Numbers match real files.
+The complete journey of a single user request through every component — the
+map for debugging, on-call, and interviews.
 
-## 1. HTTP in
+## 1. The full path
 
 ```mermaid
 sequenceDiagram
-    participant B as Browser
-    participant C as CloudFront
-    participant N as Nginx/ALB
-    participant A as FastAPI API
-    participant R as Redis
-    participant G as LangGraph
-    participant V as vLLM
-    participant P as PostgreSQL
-    participant Q as Qdrant
+    participant U as Browser (Next.js)
+    participant CF as CloudFront
+    participant GW as API Gateway
+    participant API as FastAPI
+    participant ORC as LangGraph (astream_events)
+    participant VLLM as vLLM Mistral-7B
+    participant QD as Qdrant
+    participant PG as PostgreSQL
+    participant RD as Redis
+    participant LF as Langfuse
 
-    B->>C: POST /conversations/<id>/messages/stream (Bearer JWT)
-    C->>N: HTTPS
-    N->>A: proxy (SSE, buffering off)
-    A->>A: auth deps.get_current_user → workspace tenancy check
-    Note over A: app structure: conversations.py:stream_message
+    U->>CF: POST /messages/stream (Bearer JWT)
+    CF->>GW: TLS
+    GW->>GW: rate limit (Redis INCR)
+    GW->>API: routed
+    API->>API: validate JWT → get_workspace → RBAC
+    API->>PG: INSERT message (user)
+    API->>ORC: run_conversation_stream(thread_id)
+    ORC->>PG: checkpoint (planner state)
+    ORC->>VLLM: planner call (tools=None, JSON mode)
+    VLLM-->>ORC: plan + flags
+    ORC->>ORC: route (deterministic)
+    ORC->>PG: checkpoint
+    ORC->>QD: retrieve_documents (filter workspace)
+    ORC->>VLLM: researcher call
+    VLLM-->>ORC: claims + confidence
+    ORC->>VLLM: executor call (tool schemas)
+    ORC->>ORC: validate args, run tool, record result
+    ORC->>VLLM: finalizer call (answer + citations)
+    ORC->>VLLM: critic call (score)
+    alt score < 0.7 and loop < 3
+        ORC->>VLLM: researcher again (with critique)
+    end
+    ORC->>PG: checkpoint (final)
+    ORC-->>API: SSE stream (plan/agent/token/answer)
+    API-->>GW: SSE frames
+    GW-->>CF: SSE
+    CF-->>U: EventSource stream
+    API->>PG: INSERT assistant message + UsageRecords
+    API->>LF: trace completed
+    U->>U: render answer + citations
 ```
 
-## 2. API layer (app/api/v1/conversations.py)
+## 2. Component-by-component timeline
 
-```python
-db.add(Message(role=USER, content=content))   # persist user turn
-db.commit()
-return StreamingResponse(event_stream(), media_type="text/event-stream")
-```
+| t | Component | What happens | Failure mode |
+|---|---|---|---|
+| 0ms | Next.js | optimistic UI; EventSource opens | 401 → re-login |
+| 5ms | Gateway | rate limit + JWT check | 429 envelope |
+| 10ms | FastAPI | schema validation, RBAC, thread lookup | 404/403 |
+| 20ms | PG | user message insert | retry/500 |
+| 25ms | Orchestrator | build input state, start `astream_events` | — |
+| 30ms | PostgresSaver | checkpoint per step | fails → no resume; metric |
+| 50ms–2s | vLLM | planner call | LLMUnavailable → fallback |
+| 50–400ms | Qdrant | tenant-filtered top-k | empty → weak evidence flag |
+| +2–8s | vLLM | researcher/executor/finalizer/critic | per-call timeout |
+| +8s | Orchestrator | critic loop decisions | budget exhausted → best effort |
+| +8–10s | FastAPI | SSE: answer + done; persistence | db errors are best-effort |
+| +10s | Langfuse | full trace + cost written | non-blocking |
 
-- Input validated by FastAPI + Pydantic (404/422 typed envelope).
-- Concurrency: route is sync/threadpool; each turn one row.
+## 3. Where streaming tokens come from
 
-## 3. Orchestrator bridge (app/orchestrator/service.py)
+`graph.astream_events(..., version="v2")` emits:
 
-`run_conversation_stream` builds agent inputs and **streams the compiled
-graph**:
+- `on_chain_start/end` → `agent_start`/`agent_end` (node name in metadata)
+- `on_chat_model_stream` → `token` events (delta content)
+- `on_tool_start/end` → `tool_call`/`tool_result`
+- `on_interrupt` → `human_approval` (executor paused)
 
-```python
-async for event in graph.astream_events(initial, config=build_config(thread_id), version="v2"):
-    kind, node = event["event"], metadata["langgraph_node"]
-    if kind == on_chain_start   → yield agent_start(node)
-    if kind == on_chat_model_stream → yield token(node, delta)
-    if kind == on_tool_start/end    → yield tool_call/tool_result
-    if kind == on_interrupt         → yield human_approval
-```
+The FastAPI `event_stream` generator maps these to SSE `data:` frames; the
+frontend assembles deltas per agent bubble.
 
-Exit conditions: on end → emits `evidence`, `answer`, `done`; terminals
-already persisted via `_persist_results` (assistant message + usage rows).
+## 4. Cost & persistence tail
 
-## 4. Inside the graph (app/graph/builder.py)
+After `done`, in the same request thread (async, best-effort):
 
-```mermaid
-flowchart TB
-    S[START] --> P[planner]
-    P -->|needs_tools| E[executor]
-    P -->|needs_retrieval/web| R[researcher]
-    P -->|direct| F[finalizer]
-    R -->|needs_tools| E
-    R -->|no tools| F
-    E --> F
-    F --> C[critic]
-    C -->|confidence ≥ 0.7| END[END]
-    C -->|low & iterations ≤3| R
-    C -->|budget exhausted| END
-```
+1. `INSERT assistant Message` (content + token metadata).
+2. For each `usage` entry in state: `persist_usage` → `UsageRecord` row
+   (model, agent, tokens, cost) — powers billing + dashboards + the 40% claim.
+3. Long-term memory extraction scheduled (Celery, post-response).
 
-Each node reads shared `AgentState` and returns a partial update
-(accumulated channels append). The executations run synchronously inside the
-async event loop via threadpool; tokens are pushed through `on_chat_model_stream`.
+## 5. Debugging a bad request (playbook)
 
-### Critical path
-1. **planner_node** — prompt with request → JSON `tasks`/`needs_*` → returns
-   `plan`, sets `current_agent`.
-2. **researcher_node** — `embed_query` → `vectorstore.search(workspace_id,
-   q)` with tenant payload filter → context chunks in state; LLM synthesizes
-   claims with citations.
-3. **executor_node** — OpenAI function-calling with
-   `openai_schemas_of(SAFE_TOOLS)`; side-effect tools call
-   `interrupt()` for human approval; results appended to `tool_results`.
-4. **finalizer_node** — writes `answer` from RAG + citations (+ critic
-   feedback on iter_2).
-5. **critic_node** — LLM JSON score → `confidence`.
+1. Grab the correlation id from the UI/network tab.
+2. Query Loki: `{service="api"} |= "{correlation_id}"` — find the graph span.
+3. Open Langfuse trace by the same id — see each agent's prompt/response/cost.
+4. Check Prometheus: `conductor_agent_steps_total{agent}` + critic loop
+   distribution; is one agent failing?
+5. If tool-related: `conductor_tool_calls_total{tool,status}`; approve/deny
+   audit log for HITL paths.
+6. If latency: vLLM queue depth + KV-cache metrics; check spot reclaim.
 
-### Streaming back
-`finalize` → `on_chat_model_stream` events → SSE `data:` lines → React
-`ChatWindow` appends tokens live.
+## 6. Testing this flow
 
-## 5. Persistence + telemetry
-
-After the run, `_persist_results`:
-- assistant `Message` (content = final answer, metadata tokens) — one write;
-- `persist_usage(db, conv, usage)` per agent step → usage rows → /usage
-  endpoint + Prometheus/Langfuse.
-
-## 6. Failure paths
-
-| Failure | Handling | Outcome to user |
-|---|---|---|
-| vLLM down | `chat_with_fallback` retries/backoff → fallback model | still answers |
-| Postgres down on checkpointer | graph can't checkpoint | 503 typed envelope |
-| Tool returns error | appended with `status: error`, graph continues | partial answer with note |
-| Interrupt (approve/reject) | graph pauses at checkpoint | `human_approval` SSE; resume via `Command(resume=...)` |
-
-## 7. Costing at the source
-
-`app/models/gateway.py` returns token counts the SAME call that produced
-them; the bridge reads `usage` off the final state and pushes one row per
-agent into `usage_records`, giving per-stage costs that feed
-`docs/16` cost controls end-to-end.
-
----
-
-**End-to-end**: browser → CDN → ALB → FastAPI → LangGraph (`astream_events`) →
-planner/researcher/executor/critic → vLLM (token stream) → SSE → React UI →
-Postgres writes + Prometheus/Langfuse telemetry.
+- **Unit**: routing (test_graph), chunkers, security, tools.
+- **Integration**: FastAPI TestClient + mocked graph (inject fake stream).
+- **E2E**: dev compose + a small scripted conversation asserting SSE sequence
+  (agent_start → … → done) and DB rows written.
