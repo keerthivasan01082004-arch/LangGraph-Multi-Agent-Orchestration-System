@@ -27,8 +27,6 @@ def _safe_eval(node: ast.AST) -> float | int:
         return _OPERATORS[type(node.op)](_safe_eval(node.left), _safe_eval(node.right))
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
         return -_safe_eval(node.operand)
-    if isinstance(node, ast.Num):
-        return node.n  # py3.7 and earlier fallback
     raise SyntaxError("Expression contains unsupported operations")
 
 
