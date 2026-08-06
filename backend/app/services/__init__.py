@@ -1,0 +1,1 @@
+"""Service layer: storage, embeddings, retrieval, orchestration glue."""
