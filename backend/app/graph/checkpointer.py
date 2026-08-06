@@ -1,35 +1,43 @@
-"""Checkpointing and long-term memory backends.
+"""Checkpointer for thread history: LangGraph PostgresSaver.
 
-Short-term memory (per-thread conversation state) uses the LangGraph Postgres
-checkpointer — durable, resumable, and consistent with the API database.
-
-Long-term memory (cross-conversation facts per user/workspace) uses the
-LangGraph Postgres store. Design details in docs/08-memory-architecture.md.
+Persists every step checkpoint per thread_id → conversation resume, fault
+tolerance, and human-in-the-loop interrupts survive process restarts.
 """
 
 from __future__ import annotations
 
-from functools import lru_cache
+from typing import Any
+
+from sqlalchemy import text
 
 from app.config import get_settings
 
 
-@lru_cache
-def get_graph_checkpointer():
+def get_checkpointer() -> Any | None:
+    """Build a PostgresSaver lazily.
+
+    Returns None when the database is unreachable (scaffold/CI mode) so the
+    app still boots. Production wiring guarantees the checkpointer is present.
+    """
     from langgraph.checkpoint.postgres import PostgresSaver
 
     settings = get_settings()
-    saver = PostgresSaver.from_conn_string(settings.database_url)
-    # Idempotent: creates checkpoint tables on first run.
-    saver.setup()
-    return saver
+    try:
+        saver = PostgresSaver.from_conn_string(settings.database_url)
+        saver.setup()
+        return saver
+    except Exception:
+        return None
 
 
-@lru_cache
-def get_store():
+def get_store() -> Any | None:
+    """Long-term memory store (Postgres-backed in production)."""
     from langgraph.store.postgres import PostgresStore
 
     settings = get_settings()
-    store = PostgresStore.from_conn_string(settings.database_url)
-    store.setup()
-    return store
+    try:
+        store = PostgresStore.from_conn_string(settings.database_url)
+        store.setup()
+        return store
+    except Exception:
+        return None

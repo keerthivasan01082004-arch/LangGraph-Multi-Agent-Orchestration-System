@@ -1,102 +1,69 @@
-"""LangGraph graph assembly.
+"""LangGraph graph construction.
 
-Pipeline:
-    START -> planner -> (researcher -> executor?) -> draft -> critic -> finalize -> END
+Topology:
+  START → planner → route
+     route ──(tools)─────────────▶ executor ─┐
+     route ──(research)─────────▶ researcher ─┴──▶ finalizer → critic
+     route ──(answer directly)────────────────┘      │ approve ▶ END
+                                                     └ reject (≤3) ▶ researcher
 
-Conditional edges:
-    planner  -> researcher | executor | draft   (capability flags)
-    researcher -> executor | draft              (tools required?)
-    critic   -> draft (reject, revise) | finalize (approve)
-
-Parallelism: the researcher node fans out per-task with the Send API in
-production (see docs/05-langgraph-system.md); the scaffold keeps a single
-pass for determinism and cost.
-
-Human-in-the-loop: approval-gated tools interrupt inside executor_node; the
-caller resumes with Command(resume="granted") via the checkpointer.
+Conditional routing, a finite critique loop, and an interrupt-based
+human-in-the-loop approval path for sensitive tools. See docs/05-langgraph-system.md.
 """
 
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
-from app.agents.nodes import (
-    critic_node,
-    executor_node,
-    finalizer_node,
-    planner_node,
-    researcher_node,
-    streaming_finalize_node,
-)
-from app.config import get_settings
-from app.graph.checkpointer import get_graph_checkpointer, get_store
-from app.graph.routes import route_after_critic, route_after_planner, route_after_research
+from app.agents.nodes import critic_node, executor_node, finalizer_node, planner_node, researcher_node
 from app.graph.state import AgentState
 
-_GRAPH = None
+MAX_ITERATIONS = 3
+CRITIC_APPROVAL_SCORE = 0.7
 
 
-def build_graph(enable_critic: bool | None = None) -> Any:
-    """Build and compile the Conductor graph with Postgres checkpointing."""
-    global _GRAPH
-    settings = get_settings()
-    if enable_critic is None:
-        enable_critic = settings.enable_critic
+def _route_after_planner(state: AgentState) -> str:
+    if state.get("needs_tools"):
+        return "executor"
+    if state.get("needs_retrieval") or state.get("needs_web"):
+        return "researcher"
+    return "finalizer"
 
-    g = StateGraph(AgentState)
-    g.add_node("planner", planner_node)
-    g.add_node("researcher", researcher_node)
-    g.add_node("executor", executor_node)
-    g.add_node("draft", finalizer_node)
-    g.add_node("critic", critic_node)
-    g.add_node("finalize", streaming_finalize_node)
 
-    g.add_edge(START, "planner")
-    g.add_conditional_edges(
+def _route_after_researcher(state: AgentState) -> str:
+    return "executor" if state.get("needs_tools") else "finalizer"
+
+
+def _route_after_critic(state: AgentState) -> str:
+    if state.get("confidence", 0.0) >= CRITIC_APPROVAL_SCORE:
+        return "END"
+    if state.get("iterations", 0) >= MAX_ITERATIONS:
+        return "END"  # budget exhausted — ship best effort
+    return "researcher"  # loop back with accumulated critique
+
+
+def build_graph(checkpointer: Any = None, store: Any = None):
+    """Build and compile the graph. `checkpointer` enables threads/resume,
+    `store` enables long-term memory."""
+    graph = StateGraph(AgentState)
+
+    graph.add_node("planner", planner_node)
+    graph.add_node("researcher", researcher_node)
+    graph.add_node("executor", executor_node)
+    graph.add_node("critic", critic_node)
+    graph.add_node("finalizer", finalizer_node)
+
+    graph.add_edge(START, "planner")
+    graph.add_conditional_edges(
         "planner",
-        route_after_planner,
-        {"researcher": "researcher", "executor": "executor", "draft": "draft"},
+        _route_after_planner,
+        {"executor": "executor", "researcher": "researcher", "finalizer": "finalizer"},
     )
-    g.add_conditional_edges("researcher", route_after_research, {"executor": "executor", "draft": "draft"})
-    g.add_edge("executor", "draft")
+    graph.add_conditional_edges("researcher", _route_after_researcher, {"executor": "executor", "finalizer": "finalizer"})
+    graph.add_edge("executor", "finalizer")
+    graph.add_edge("finalizer", "critic")
+    graph.add_conditional_edges("critic", _route_after_critic, {"researcher": "researcher", "END": END})
 
-    if enable_critic:
-        g.add_edge("draft", "critic")
-        g.add_conditional_edges("critic", route_after_critic, {"draft": "draft", "finalize": "finalize"})
-    else:
-        g.add_edge("draft", "finalize")
-
-    g.add_edge("finalize", END)
-
-    graph = g.compile(checkpointer=get_graph_checkpointer(), store=get_store())
-    if _GRAPH is None:
-        _GRAPH = graph
-    return graph
-
-
-def get_graph() -> Any:
-    if _GRAPH is None:
-        return build_graph()
-    return _GRAPH
-
-
-def run_graph(inputs: dict[str, Any], thread_id: str, *, resume: Any | None = None) -> dict[str, Any]:
-    """Synchronous run (used by Celery batches and tests)."""
-    graph = get_graph()
-    config = {"configurable": {"thread_id": thread_id}}
-    if resume is not None:
-        from langgraph.types import Command
-
-        inputs = Command(resume=resume)
-    return graph.invoke(inputs, config=config)
-
-
-async def stream_graph(inputs: dict[str, Any], thread_id: str) -> Any:
-    """Stream the graph: yields ('custom', event) token events and
-    ('values', state) after each node for the SSE bridge."""
-    graph = get_graph()
-    config = {"configurable": {"thread_id": thread_id}}
-    return graph.astream(inputs, config=config, stream_mode=["values", "custom"])
+    return graph.compile(checkpointer=checkpointer, store=store)
