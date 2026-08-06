@@ -1,1 +1,1 @@
-"""Orchestrator package: bridges the FastAPI layer to the LangGraph runtime."""
+"""Orchestrator: bridges the HTTP streaming layer to the LangGraph runtime."""
