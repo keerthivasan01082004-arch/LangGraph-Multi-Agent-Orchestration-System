@@ -1,0 +1,1 @@
+"""Tool calling subsystem: definitions, selection, and safe execution."""
