@@ -65,6 +65,11 @@ dist/
 *.sqlite3
 *.db
 
+# Runtime artifacts
+*.log
+*.pid
+next-env.d.ts
+
 # Model artifacts (never commit weights — match by extension, not the app/models package)
 *.bin
 *.pt
