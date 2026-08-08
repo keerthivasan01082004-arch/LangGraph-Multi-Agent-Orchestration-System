@@ -62,7 +62,7 @@ React/Next.js (streaming chat)  →  FastAPI gateway (JWT, /api/v1)
 | `backend/` | FastAPI service, LangGraph graph, agents, tools, memory, ingestion |
 | `frontend/` | Next.js 14 App Router, TypeScript, Tailwind CSS streaming chat |
 | `finetune/` | Dataset build + LoRA/QLoRA training + eval + export to vLLM |
-| `infra/` | Docker, docker-compose, Terraform, Kubernetes, nginx SSE proxy, Prometheus/Grafana |
+| `infra/` | Docker images + compose, Terraform, Kubernetes, nginx SSE proxy, Prometheus/Grafana |
 | `docs/` | Full system design documentation (20 sections) |
 | `.github/workflows/` | CI (ruff/mypy/pytest) and CD pipelines |
 
@@ -109,7 +109,7 @@ backend/app/
 - **Qdrant** — tenant-isolated vector store for semantic retrieval over
   ingested documents.
 - **Redis** — sessions/cache; **Celery** — background ingestion pipeline.
-- **S3** — object storage for uploaded source files.
+- **S3/MinIO** — object storage for uploaded source files.
 
 ## Frontend
 
@@ -124,6 +124,9 @@ frontend/app/
 frontend/lib/auth-hook.ts     # Token storage + fetch wrapper
 frontend/components/ChatWindow.tsx
 ```
+
+The UI has a login page but **no registration form** — create an account via
+the API before logging in (see the Docker quick start below).
 
 ## Fine-tuning (`finetune/`)
 
@@ -140,7 +143,9 @@ case, and `finetune/README.md` for the local workflow.
 
 ## Infrastructure (`infra/`)
 
-- **Docker** — images for backend/frontend/nginx; `docker-compose` dev stack.
+- **Docker** — images and the dev stack live in `infra/docker/`
+  (`docker-compose.yml` + `backend.Dockerfile`, `worker.Dockerfile`,
+  `frontend.Dockerfile`).
 - **Terraform** — AWS (RDS, Redis, S3, ECS/EKS), IaC for prod.
 - **Kubernetes** — manifests for stage/prod, blue-green/canary rolling deploys.
 - **nginx** — SSE proxy config (buffering disabled for streaming).
@@ -155,21 +160,73 @@ case, and `finetune/README.md` for the local workflow.
 
 ## Quick start
 
-Prerequisites: Python 3.11+, `uv`, Node.js 18+.
+Prerequisites: Python 3.11+, `uv`, Node.js 18+, and Docker Desktop (for the
+full stack).
 
-### Backend
+### Full stack with Docker (recommended)
+
+```bash
+# 1. Prepare environment files
+cp backend/.env.example backend/.env            # local dev defaults
+cp backend/.env.example backend/.env.docker     # Docker overrides hosts to service names
+```
+
+> **Important:** in `backend/.env.docker`, all `*_URL` / `*_HOST` values must
+> use the Docker service names (`postgres`, `redis`, `qdrant`, `minio`) instead
+> of `localhost`, because containers resolve each other by name on the compose
+> network. A ready-to-use `.env.docker` is committed next to `.env.example`.
+
+```bash
+# 2. Build and start the whole stack (postgres, qdrant, redis, minio, backend, worker, frontend)
+docker compose -f infra/docker/docker-compose.yml up -d --build
+
+# 3. Apply database migrations
+docker compose -f infra/docker/docker-compose.yml exec backend alembic upgrade head
+
+# 4. Create your account (the UI has no registration form)
+curl -X POST http://localhost:8000/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"admin123","full_name":"Admin"}'
+```
+
+Then open:
+
+| Service | URL | Credentials |
+|---|---|---|
+| Frontend app | http://localhost:3000 | your registered account |
+| API docs (Swagger) | http://localhost:8000/docs | — |
+| Qdrant dashboard | http://localhost:6333/dashboard | — |
+| MinIO console | http://localhost:9001 | `minioadmin` / `minioadmin` |
+
+Useful commands:
+
+```bash
+docker compose -f infra/docker/docker-compose.yml ps        # status
+docker compose -f infra/docker/docker-compose.yml logs -f backend   # backend logs
+docker compose -f infra/docker/docker-compose.yml down      # stop everything
+```
+
+> **Chat requires an LLM.** The orchestrator talks to vLLM
+> (`VLLM_BASE_URL` in `.env`/`.env.docker`, currently pointing at the gateway)
+> and falls back to `gpt-4o-mini` via LiteLLM. Start a vLLM server or set a
+> valid `OPENAI_API_KEY` (via LiteLLM env vars) before sending chat messages.
+
+### Local development (without Docker)
+
+#### Backend
 
 ```bash
 cd backend
 uv sync --extra dev
 cp .env.example .env          # fill in secrets (see backend/.env.example)
+uv run alembic upgrade head   # apply migrations against a local Postgres
 uv run uvicorn app.main:app --reload --port 8000
 ```
 
 Health check: `curl localhost:8000/api/v1/health/live`
 OpenAPI docs: `http://localhost:8000/docs`
 
-### Frontend
+#### Frontend
 
 ```bash
 cd frontend
@@ -177,19 +234,13 @@ npm install
 npm run dev                   # http://localhost:3000
 ```
 
-### Local tests
+#### Local tests
 
 ```bash
 cd backend
-uv run pytest backend/tests        # 24 tests (API smoke, graph, tools, chunkers, security)
+uv run pytest backend/tests        # API smoke, graph, tools, chunkers, security
 uv run ruff check backend
 uv run mypy backend
-```
-
-### Full stack
-
-```bash
-docker-compose up -d          # postgres, redis, qdrant, backend, frontend
 ```
 
 ## Model routing & cost control
@@ -224,9 +275,11 @@ Start at [`docs/00-README.md`](docs/00-README.md).
 - [x] Frontend: App Router chat scaffold with auth hook and streaming UI
 - [x] Distribution: Docker, Terraform, K8s, nginx, monitoring, CI/CD
 - [x] Docs: all 20 design sections
+- [x] Docker stack verified end-to-end: build, run, migrate, register, login
+- [x] Production database migrations applied against a running PostgreSQL
 - [ ] Runtime model serving (vLLM) and frontier fallback wiring to a live key
-- [ ] Production database migrations applied against a running PostgreSQL
 - [ ] End-to-end streaming smoke test (load a doc → chat against it)
+- [ ] Registration UI on the frontend (currently API-only)
 
 ## License
 

@@ -42,9 +42,9 @@ services:
 
   backend:
     build:
-      context: ../backend
+      context: ../../backend
       dockerfile: ../infra/docker/backend.Dockerfile
-    env_file: ../backend/.env
+    env_file: ../../backend/.env.docker
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,15 +57,15 @@ services:
 
   worker:
     build:
-      context: ../backend
+      context: ../../backend
       dockerfile: ../infra/docker/worker.Dockerfile
-    env_file: ../backend/.env
+    env_file: ../../backend/.env.docker
     depends_on:
       - backend
 
   frontend:
     build:
-      context: ../frontend
+      context: ../../frontend
       dockerfile: ../infra/docker/frontend.Dockerfile
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
