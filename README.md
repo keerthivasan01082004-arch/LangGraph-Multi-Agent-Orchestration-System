@@ -281,6 +281,3 @@ Start at [`docs/00-README.md`](docs/00-README.md).
 - [ ] End-to-end streaming smoke test (load a doc → chat against it)
 - [ ] Registration UI on the frontend (currently API-only)
 
-## License
-
-MIT — see [LICENSE](LICENSE).
